@@ -39,16 +39,6 @@ async function processSymbol(symbol) {
   }
 
   const { price, volume, avgVolume10Day } = deriveQuoteFromBars(bars);
-}
-
-async function processSymbol(symbol) {
-  // Single Yahoo call now — price/volume are derived from the same bars
-  // we already need for RSI/MA/VWAP/Stochastic, instead of a second request.
-  const bars = await getHistoricalBars(symbol);
-  if (!bars || bars.length === 0) {
-    throw new Error("No data returned — check symbol");
-  }
-  const { price, volume, avgVolume10Day } = deriveQuoteFromBars(bars);
 
   const closes = bars.map((b) => b.close);
   const rsi = calcRSI(closes);
@@ -75,63 +65,67 @@ async function processSymbol(symbol) {
 
   const events = [];
 
-  if (Math.abs(zScore) > 2) {
-    events.push({
-      symbol,
-      type: "ZSCORE_SPIKE",
-      severity: Math.abs(zScore) > 3 ? "high" : "medium",
-      message: `${symbol} moved ${zScore > 0 ? "up" : "down"} ${Math.abs(zScore).toFixed(
-        1
-      )}σ from its recent average — unusual for this stock.`,
-    });
+  // Don't raise "meaningful change" alerts off simulated data — only real
+  // market moves should trigger these.
+  if (!simulated) {
+    if (Math.abs(zScore) > 2) {
+      events.push({
+        symbol,
+        type: "ZSCORE_SPIKE",
+        severity: Math.abs(zScore) > 3 ? "high" : "medium",
+        message: `${symbol} moved ${zScore > 0 ? "up" : "down"} ${Math.abs(zScore).toFixed(
+          1
+        )}σ from its recent average — unusual for this stock.`,
+      });
+    }
+
+    if (prev && prev.rsiZone && prev.rsiZone !== zone && zone !== "neutral") {
+      events.push({
+        symbol,
+        type: "RSI_CROSS",
+        severity: "medium",
+        message: `${symbol} RSI entered ${zone} territory (RSI ${rsi?.toFixed(1)}).`,
+      });
+    }
+
+    if (prev && prev.aboveMA20 != null && aboveMA20 != null && prev.aboveMA20 !== aboveMA20) {
+      events.push({
+        symbol,
+        type: "MA20_CROSS",
+        severity: "medium",
+        message: `${symbol} crossed ${aboveMA20 ? "above" : "below"} its 20-day average.`,
+      });
+    }
+
+    if (prev && prev.aboveVWAP != null && aboveVWAP != null && prev.aboveVWAP !== aboveVWAP) {
+      events.push({
+        symbol,
+        type: "VWAP_CROSS",
+        severity: "low",
+        message: `${symbol} crossed ${aboveVWAP ? "above" : "below"} its 20-day VWAP.`,
+      });
+    }
+
+    if (prev && prev.stochZone && prev.stochZone !== stochZone && stochZone !== "neutral") {
+      events.push({
+        symbol,
+        type: "STOCH_CROSS",
+        severity: "low",
+        message: `${symbol} stochastic entered ${stochZone} territory (%K ${stochK?.toFixed(1)}).`,
+      });
+    }
+
+    if (avgVolume10Day && volume > avgVolume10Day * 2) {
+      events.push({
+        symbol,
+        type: "VOLUME_SPIKE",
+        severity: "high",
+        message: `${symbol} volume is ${(volume / avgVolume10Day).toFixed(1)}x its 10-day average.`,
+      });
+    }
   }
 
-  if (prev && prev.rsiZone && prev.rsiZone !== zone && zone !== "neutral") {
-    events.push({
-      symbol,
-      type: "RSI_CROSS",
-      severity: "medium",
-      message: `${symbol} RSI entered ${zone} territory (RSI ${rsi?.toFixed(1)}).`,
-    });
-  }
-
-  if (prev && prev.aboveMA20 != null && aboveMA20 != null && prev.aboveMA20 !== aboveMA20) {
-    events.push({
-      symbol,
-      type: "MA20_CROSS",
-      severity: "medium",
-      message: `${symbol} crossed ${aboveMA20 ? "above" : "below"} its 20-day average.`,
-    });
-  }
-
-  if (prev && prev.aboveVWAP != null && aboveVWAP != null && prev.aboveVWAP !== aboveVWAP) {
-    events.push({
-      symbol,
-      type: "VWAP_CROSS",
-      severity: "low",
-      message: `${symbol} crossed ${aboveVWAP ? "above" : "below"} its 20-day VWAP.`,
-    });
-  }
-
-  if (prev && prev.stochZone && prev.stochZone !== stochZone && stochZone !== "neutral") {
-    events.push({
-      symbol,
-      type: "STOCH_CROSS",
-      severity: "low",
-      message: `${symbol} stochastic entered ${stochZone} territory (%K ${stochK?.toFixed(1)}).`,
-    });
-  }
-
-  if (avgVolume10Day && volume > avgVolume10Day * 2) {
-    events.push({
-      symbol,
-      type: "VOLUME_SPIKE",
-      severity: "high",
-      message: `${symbol} volume is ${(volume / avgVolume10Day).toFixed(1)}x its 10-day average.`,
-    });
-  }
-
-    await Snapshot.create({
+  await Snapshot.create({
     symbol,
     price,
     volume,
@@ -150,7 +144,7 @@ async function processSymbol(symbol) {
 
   if (events.length) await ChangeEvent.insertMany(events);
 
-  return { price, rsi, ma20, zone, zScore, vwap, stochK, stochD };
+  return { price, rsi, ma20, zone, zScore, vwap, stochK, stochD, simulated };
 }
 
 module.exports = { processSymbol };
